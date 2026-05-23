@@ -1,0 +1,179 @@
+workflow:
+  rules:
+  - if: $CI_COMMIT_BRANCH
+
+stages:
+- test
+- dependencies
+- lint
+- security
+- validate
+- cost
+- plan
+- deploy
+- documentation
+- notify
+
+include:
+- template: Jobs/SAST-IaC.gitlab-ci.yml
+- template: Security/Secret-Detection.gitlab-ci.yml
+- remote: 'https://raw.githubusercontent.com/Tooark/notification-trigger-url-include/main/.gitlab-ci.yml'
+
+variables:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  TF_PLUGIN_CACHE_DIR: ".terraform.d/plugin-cache"
+  AWS_ACCESS_KEY_ID: "$AWS_ACCESS_KEY"
+  AWS_SECRET_ACCESS_KEY: "$AWS_SECRET_KEY"
+  AWS_DEFAULT_REGION: "$AWS_REGION"
+
+.terraform_base: &terraform_base
+  image: ${ECR_BASE_URL_DEPLOY}:1-terraform-gcp
+  before_script:
+  - gcloud auth activate-service-account --key-file="$GCP_CREDENTIALS"
+  - mkdir -p .terraform.d/plugin-cache
+  cache:
+    key: "$CI_PROJECT_PATH_SLUG-$CI_COMMIT_REF_SLUG"
+    paths:
+    - .terraform.d/plugin-cache/
+    - .terraform/*
+
+.plan_template: &plan_template
+  stage: plan
+  script:
+  - terraform init
+  - terraform fmt --recursive
+  - terraform plan -out "plan-$ENV_DIR.tfplan"
+  artifacts:
+    name: "tfplan-$ENV_DIR-$CI_COMMIT_SHORT_SHA"
+    when: always
+    expire_in: 1 day
+    paths:
+    - plan-$ENV_DIR.tfplan
+  resource_group: "$ENV_DIR"
+
+.apply_template: &apply_template
+  image: ${ECR_BASE_URL_DEPLOY}:1-terraform-aws
+  stage: deploy
+  script:
+  - terraform init
+  - terraform apply "plan-$ENV_DIR.tfplan"
+  resource_group: "$ENV_DIR"
+
+default:
+  retry:
+    max: 2
+    when:
+    - runner_system_failure
+    - stuck_or_timeout_failure
+    - unknown_failure
+    - api_failure
+    - job_execution_timeout
+
+tflint:
+  stage: lint
+  before_script:
+  - tflint --init
+  script:
+  - tflint --recursive --config "$(pwd)/.tflint.hcl"
+  allow_failure: true
+
+terrascan:
+  stage: security
+  needs:
+  - tflint
+  image:
+    name: tenable/terrascan:latest
+    entrypoint: [ "" ]
+  allow_failure: true
+  script:
+  - terrascan scan -v
+
+validate:
+  stage: validate
+  needs:
+  - terrascan
+  before_script:
+  - terraform init
+  script:
+  - terraform validate
+
+cost:
+  stage: cost
+  needs:
+  - validate
+  script:
+  - infracost breakdown --path /
+
+plan:
+  <<: [ *terraform_base, *plan_template ]
+  variables:
+    ENV_DIR: prd
+
+apply:
+  <<: [ *terraform_base, *apply_template ]
+  variables:
+    ENV_DIR: prd
+  needs:
+  - job: plan
+    artifacts: true
+
+docs:
+  stage: documentation
+  script:
+  - terraform-docs markdown --output-file README.md --anchor=false --html=false .
+  - git config --global user.email "ci-bot@gitlab.com.br"
+  - git config --global user.name "CI Bot"
+  - git add README.md
+  - 'git commit -m "chore(docs): update terraform-docs [skip ci]" || echo "No changes to commit"'
+  - git push https://oauth2:${GITLAB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git HEAD:${CI_COMMIT_REF_NAME}
+  
+notify_success:
+  extends: .notify
+  when: on_success
+  needs:
+  - docs
+  variables:
+    NOTIFICATION_STATUS: "success"
+
+notify_failure:
+  extends: .notify
+  when: on_failure
+  needs:
+  - docs
+  variables:
+    NOTIFICATION_STATUS: "failed"
+
+#Merge Requests
+tflint-mr:
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+  stage: lint
+  before_script:
+  - tflint --init
+  script:
+  - tflint
+
+terrascan-mr:
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+  stage: security
+  needs:
+  - tflint-mr
+  image:
+    name: tenable/terrascan:latest
+    entrypoint: [ "" ]
+  allow_failure: true
+  script:
+  - terrascan scan -v
+
+validate-mr:
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+  stage: validate
+  needs:
+  - terrascan-mr
+  before_script:
+  - terraform init
+  script:
+  - terraform validate
