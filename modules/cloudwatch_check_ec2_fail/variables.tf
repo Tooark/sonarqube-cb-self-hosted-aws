@@ -2,19 +2,19 @@
 variable "comparison_operator" {
   type        = string
   description = "Operador de comparação"
-  default     = "GreaterThanThreshold"
+  default     = "GreaterThanOrEqualToThreshold"
 }
 
 variable "evaluation_periods" {
   type        = number
-  description = "Numero de vezes que é feito a comparação de estado do desejado x estado atual da ec2"
+  description = "Numero de periodos consecutivos com falha para a ec2 ser reiniciada"
   default     = 2
 }
 
 variable "threshold" {
   type        = number
-  description = "Numero de falhas consecutivas para a ec2 ser reiniciada"
-  default     = 2
+  description = "Valor da metrica StatusCheckFailed (0 ou 1) a partir do qual o periodo conta como falha"
+  default     = 1
 }
 
 variable "metric_name" {

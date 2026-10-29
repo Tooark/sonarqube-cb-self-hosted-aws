@@ -5,8 +5,7 @@ variable "account_project_base_name" {
 }
 variable "account_region" {
   type        = string
-  description = "Região da conta AWS"
-  default     = "us-east-1"
+  description = "Região da conta AWS (usada no ARN da acao de reboot do alarme)"
 }
 
 variable "key_pair_algorithm" {
@@ -70,4 +69,9 @@ variable "aditional_role_permissions" {
 variable "cw_sns_topic_arn" {
   type        = string
   description = "ARN do topico SNS"
+}
+variable "secrets_read_arns" {
+  type        = list(string)
+  description = "ARNs de secrets do Secrets Manager que a instancia pode ler (ex.: credenciais do banco)"
+  default     = []
 }

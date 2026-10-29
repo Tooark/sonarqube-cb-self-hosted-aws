@@ -86,10 +86,11 @@ module "sg_ec2" {
       source_security_group_id = module.sg_lb.security_group_id
     },
     {
-      from_port                = 22
-      to_port                  = 22
-      protocol                 = "tcp"
-      cidr_blocks = ["0.0.0.0/0"]
+      # SSH only from inside the VPC (EC2 Instance Connect Endpoint); the host has no public IP
+      from_port   = 22
+      to_port     = 22
+      protocol    = "tcp"
+      cidr_blocks = [module.vpc.vpc_cidr]
     }
   ], var.ec2_ingress_rules)
   egress_rules = var.ec2_egress_rules
@@ -107,12 +108,16 @@ module "ec2" {
   ip_public                  = var.ec2_ip_public
   instance_type              = var.ec2_instance_type
   security_group_ids         = [module.sg_ec2.security_group_id]
+  account_region             = var.account_region
   aditional_role_permissions = var.ec2_instance_profile_aditional_permissions
+  secrets_read_arns          = [module.rds.credentials_secret_arn]
   cw_sns_topic_arn           = module.sns.arn
   user_data_script = templatefile("./user_data.tpl", {
-    sonar_version = var.sonar_version
-    domain_name = var.sonar_domain_name
-    })
+    sonar_version  = var.sonar_version
+    domain_name    = var.sonar_domain_name
+    db_secret_name = module.rds.credentials_secret_name
+    aws_region     = var.account_region
+  })
 
   depends_on = [
     module.private_subnets,
@@ -134,7 +139,7 @@ module "target_group_lb_tcp" {
 
 module "certificate" {
   source = "./modules/certificate"
-  
+
   domain_name              = var.cert_domain_name
   domain_alternative_names = var.cert_domain_alternative_names
   validation_method        = var.cert_validation_method

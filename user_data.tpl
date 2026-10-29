@@ -40,8 +40,8 @@ if [ -n "$JAVA_BIN_PATH" ]; then
   export JAVA_HOME="$JAVA_HOME_DIR"
 fi
 
-# Instala o EC2 Instance Connect e curl
-sudo apt-get install -y ec2-instance-connect curl
+# Instala o EC2 Instance Connect, curl e AWS CLI (usado para ler o secret do banco)
+sudo apt-get install -y ec2-instance-connect curl awscli
 
 # Cria um diretório para o SonarQube
 sudo mkdir /opt/sonarqube
@@ -92,12 +92,12 @@ sudo systemctl daemon-reload
 ### Configura o arquivo sonar.properties
 # Carregar variáveis de ambiente do Secrets manager
 
-# Recuperar o segredo do Google Secret Manager
-CREDS=$(aws secretsmanager get-secret-value --secret-id sonar_db_credentials --query SecretString --output text)
-SONAR_DB_USER=$(echo $CREDS | jq -r .username)
-SONAR_DB_PASSWORD=$(echo $CREDS | jq -r .password)
-SONAR_DB_HOST=$(echo $CREDS | jq -r .host)
-SONAR_DB_NAME=$(echo $CREDS | jq -r .dbname)
+# Recuperar o segredo do AWS Secrets Manager
+CREDS=$(aws secretsmanager get-secret-value --secret-id "${db_secret_name}" --region "${aws_region}" --query SecretString --output text)
+SONAR_DB_USER=$(echo "$CREDS" | jq -r .username)
+SONAR_DB_PASSWORD=$(echo "$CREDS" | jq -r .password)
+SONAR_DB_HOST=$(echo "$CREDS" | jq -r .host)
+SONAR_DB_NAME=$(echo "$CREDS" | jq -r .dbname)
 
 sleep 5
 
@@ -153,8 +153,9 @@ sudo ln -sf /etc/nginx/sites-available/sonarqube /etc/nginx/sites-enabled/
 sudo nginx -t
 sudo systemctl restart nginx
 
-#Instalacao do cloudwatch agent(Debian)
-sudo curl -sS "https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/debian_arm64/amazon-ssm-agent.deb" -o "/tmp/amazon-ssm-agent.deb"
+#Instalacao do SSM Agent (Debian/Ubuntu, amd64 ou arm64)
+ARCH=$(dpkg --print-architecture)
+sudo curl -sS "https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/debian_$${ARCH}/amazon-ssm-agent.deb" -o "/tmp/amazon-ssm-agent.deb"
 sudo dpkg -i "/tmp/amazon-ssm-agent.deb"
 sudo systemctl daemon-reload
 apt show amazon-ssm-agent

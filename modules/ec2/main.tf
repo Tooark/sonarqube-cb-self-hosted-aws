@@ -16,8 +16,8 @@ data "aws_ami" "image" {
 module "key_pair_ec2" {
   source = "../key_pair"
 
-  name                      = var.name
-  key_algorithm             = var.key_pair_algorithm
+  name          = var.name
+  key_algorithm = var.key_pair_algorithm
 }
 
 resource "aws_instance" "main" {
@@ -56,6 +56,7 @@ resource "aws_instance" "main" {
   tags = {
     Name            = format("%s", var.name)
     CloudWatchAgent = "true"
+    os              = "Linux" # targeted by the SSM association that configures the CloudWatch Agent
   }
 
   lifecycle {
@@ -67,108 +68,81 @@ resource "aws_instance" "main" {
 }
 
 #SSM Agent Permissions
+locals {
+  ec2_base_permissions = [
+    "ssm:UpdateInstanceInformation",
+    "ssm:PutInventory",
+    "ssm:StartSession",
+    "ssm:TerminateSession",
+    "ssm:ResumeSession",
+    "ssm:DescribeSessions",
+    "ssm:DescribeInstanceProperties",
+    "ssm:DescribeInstanceInformation",
+    "ssm:GetDocument",
+    "ssm:ListAssociations",
+    "ssm:UpdateAssociationStatus",
+    "ssm:DescribeAssociation",
+    "ssm:GetManifest",
+    "ssm:GetParameters",
+    "ssm:GetParameter",
+    "ssm:DeleteParameter",
+    "ssm:PutParameter",
+    "ssm:ListCommandInvocations",
+    "ssm:ListCommands",
+    "ssm:UpdateInstanceAssociationStatus",
+    "ssm:SendCommand",
+    "ec2messages:AcknowledgeMessage",
+    "ec2messages:DeleteMessage",
+    "ec2messages:FailMessage",
+    "ec2messages:GetEndpoint",
+    "ec2messages:GetMessages",
+    "ec2messages:SendReply",
+    "s3:GetEncryptionConfiguration",
+    "s3:PutObject",
+    "s3:GetObject",
+    "s3:DeleteObject",
+    "s3:PutObjectAcl",
+    "s3:ListBucket",
+    "s3:AbortMultipartUpload",
+    "s3:ListMultipartUploadParts",
+    "s3:ListBucketMultipartUploads",
+    "kms:Decrypt",
+    "ses:SendRawEmail"
+  ]
+
+  # Read access to specific secrets (e.g. the database credentials read by user_data)
+  ec2_secrets_statement = length(var.secrets_read_arns) > 0 ? [
+    {
+      Action   = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
+      Effect   = "Allow"
+      Resource = var.secrets_read_arns
+    }
+  ] : []
+}
+
 resource "aws_iam_policy" "ssm_agent_policy" {
   name = format("Ec2ProfilePolicy-%s-%s", var.name, var.account_project_base_name)
 
   policy = jsonencode({
     Version = "2012-10-17",
-    Statement = [
+    Statement = concat([
       {
-        Action = length(var.aditional_role_permissions) > 0 ? concat([
-          "ssm:UpdateInstanceInformation",
-          "ssm:PutInventory",
-          "ssm:StartSession",
-          "ssm:TerminateSession",
-          "ssm:ResumeSession",
-          "ssm:DescribeSessions",
-          "ssm:DescribeInstanceProperties",
-          "ssm:DescribeInstanceInformation",
-          "ssm:GetDocument",
-          "ssm:ListAssociations",
-          "ssm:UpdateAssociationStatus",
-          "ssm:DescribeAssociation",
-          "ssm:GetManifest",
-          "ssm:GetParameters",
-          "ssm:GetParameter",
-          "ssm:DeleteParameter",
-          "ssm:PutParameter",
-          "ssm:ListCommandInvocations",
-          "ssm:ListCommands",
-          "ssm:UpdateInstanceAssociationStatus",
-          "ssm:SendCommand",
-          "ec2messages:AcknowledgeMessage",
-          "ec2messages:DeleteMessage",
-          "ec2messages:FailMessage",
-          "ec2messages:GetEndpoint",
-          "ec2messages:GetMessages",
-          "ec2messages:SendReply",
-          "s3:GetEncryptionConfiguration",
-          "s3:PutObject",
-          "s3:GetObject",
-          "s3:DeleteObject",
-          "s3:PutObjectAcl",
-          "s3:ListBucket",
-          "s3:AbortMultipartUpload",
-          "s3:ListMultipartUploadParts",
-          "s3:ListBucketMultipartUploads",
-          "kms:Decrypt",
-          "ses:SendRawEmail"
-          ], var.aditional_role_permissions
-          ) : [
-          "ssm:UpdateInstanceInformation",
-          "ssm:PutInventory",
-          "ssm:StartSession",
-          "ssm:TerminateSession",
-          "ssm:ResumeSession",
-          "ssm:DescribeSessions",
-          "ssm:DescribeInstanceProperties",
-          "ssm:DescribeInstanceInformation",
-          "ssm:GetDocument",
-          "ssm:ListAssociations",
-          "ssm:UpdateAssociationStatus",
-          "ssm:DescribeAssociation",
-          "ssm:GetManifest",
-          "ssm:GetParameters",
-          "ssm:GetParameter",
-          "ssm:DeleteParameter",
-          "ssm:PutParameter",
-          "ssm:ListCommandInvocations",
-          "ssm:ListCommands",
-          "ssm:UpdateInstanceAssociationStatus",
-          "ssm:SendCommand",
-          "ec2messages:AcknowledgeMessage",
-          "ec2messages:DeleteMessage",
-          "ec2messages:FailMessage",
-          "ec2messages:GetEndpoint",
-          "ec2messages:GetMessages",
-          "ec2messages:SendReply",
-          "s3:GetEncryptionConfiguration",
-          "s3:PutObject",
-          "s3:GetObject",
-          "s3:DeleteObject",
-          "s3:PutObjectAcl",
-          "s3:ListBucket",
-          "s3:AbortMultipartUpload",
-          "s3:ListMultipartUploadParts",
-          "s3:ListBucketMultipartUploads",
-          "kms:Decrypt",
-          "ses:SendRawEmail"
-        ],
-        Effect   = "Allow",
+        Action   = concat(local.ec2_base_permissions, var.aditional_role_permissions)
+        Effect   = "Allow"
         Resource = "*"
       },
-      # Adicione esta declaração para permitir que a instância envie logs para o CloudWatch Logs
+      # Allow the instance to send logs to CloudWatch Logs
       {
         Action = [
           "logs:CreateLogGroup",
           "logs:CreateLogStream",
           "logs:DescribeLogStreams",
           "logs:PutLogEvents"
-        ],
-        Effect   = "Allow",
+        ]
+        Effect   = "Allow"
         Resource = "arn:aws:logs:*:*:log-group:/aws/ssm/*"
       }
-    ]
+    ], local.ec2_secrets_statement)
   })
 }
 
@@ -223,7 +197,7 @@ module "install_cloudwatch_agent" {
 module "secrets" {
   source = "../parameter_store"
 
-  name   = "/ec2/instance-id/${aws_instance.main.tags["Name"]}"
+  name  = "/ec2/instance-id/${aws_instance.main.tags["Name"]}"
   value = aws_instance.main.id
 }
 
@@ -231,7 +205,7 @@ module "secrets" {
 module "restart_ec2_with_healthcheck_problems" {
   source = "../cloudwatch_check_ec2_fail"
 
-  region                    = var.account_region
+  region = var.account_region
 
   instance_id   = aws_instance.main.id
   instance_name = aws_instance.main.tags["Name"]
@@ -251,10 +225,9 @@ module "default_cpu_alarm" {
   statistic           = "Average"
   alarm_description   = "Uso da CPU excedeu 80% da instancia ec2 ${aws_instance.main.tags["Name"]}"
 
+  # AWS/EC2 per-instance metrics carry only the InstanceId dimension
   dimension = {
-    InstanceId   = aws_instance.main.id
-    InstanceType = aws_instance.main.instance_type
-    ImageId      = aws_instance.main.ami
+    InstanceId = aws_instance.main.id
   }
 
   sns_topic_arn = var.cw_sns_topic_arn

@@ -25,7 +25,7 @@ variable "namespace" {
 
 variable "threshold" {
   type        = number
-  description = "Numero de falhas consecutivas para a ec2 ser reiniciada"
+  description = "Valor limite da metrica que dispara o alarme"
   default     = 2
 }
 

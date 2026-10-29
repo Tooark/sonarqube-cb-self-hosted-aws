@@ -1,5 +1,9 @@
 workflow:
   rules:
+  # Merge request pipelines run the *-mr jobs; branch pipelines run everything else.
+  - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+  - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+    when: never
   - if: $CI_COMMIT_BRANCH
 
 stages:
@@ -27,10 +31,15 @@ variables:
   AWS_SECRET_ACCESS_KEY: "$AWS_SECRET_KEY"
   AWS_DEFAULT_REGION: "$AWS_REGION"
 
+# Jobs that must run only in branch pipelines (never in merge request pipelines)
+.branch_rules: &branch_rules
+- if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+  when: never
+- if: $CI_COMMIT_BRANCH
+
 .terraform_base: &terraform_base
-  image: ${ECR_BASE_URL_DEPLOY}:1-terraform-gcp
+  image: ${ECR_BASE_URL_DEPLOY}:1-terraform-aws
   before_script:
-  - gcloud auth activate-service-account --key-file="$GCP_CREDENTIALS"
   - mkdir -p .terraform.d/plugin-cache
   cache:
     key: "$CI_PROJECT_PATH_SLUG-$CI_COMMIT_REF_SLUG"
@@ -40,6 +49,7 @@ variables:
 
 .plan_template: &plan_template
   stage: plan
+  rules: *branch_rules
   script:
   - terraform init
   - terraform fmt --recursive
@@ -53,8 +63,8 @@ variables:
   resource_group: "$ENV_DIR"
 
 .apply_template: &apply_template
-  image: ${ECR_BASE_URL_DEPLOY}:1-terraform-aws
   stage: deploy
+  rules: *branch_rules
   script:
   - terraform init
   - terraform apply "plan-$ENV_DIR.tfplan"
@@ -72,6 +82,7 @@ default:
 
 tflint:
   stage: lint
+  rules: *branch_rules
   before_script:
   - tflint --init
   script:
@@ -80,6 +91,7 @@ tflint:
 
 terrascan:
   stage: security
+  rules: *branch_rules
   needs:
   - tflint
   image:
@@ -91,6 +103,7 @@ terrascan:
 
 validate:
   stage: validate
+  rules: *branch_rules
   needs:
   - terrascan
   before_script:
@@ -100,10 +113,11 @@ validate:
 
 cost:
   stage: cost
+  rules: *branch_rules
   needs:
   - validate
   script:
-  - infracost breakdown --path /
+  - infracost breakdown --path .
 
 plan:
   <<: [ *terraform_base, *plan_template ]
@@ -120,6 +134,7 @@ apply:
 
 docs:
   stage: documentation
+  rules: *branch_rules
   script:
   - terraform-docs markdown --output-file README.md --anchor=false --html=false .
   - git config --global user.email "ci-bot@gitlab.com.br"
@@ -127,10 +142,14 @@ docs:
   - git add README.md
   - 'git commit -m "chore(docs): update terraform-docs [skip ci]" || echo "No changes to commit"'
   - git push https://oauth2:${GITLAB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git HEAD:${CI_COMMIT_REF_NAME}
-  
+
 notify_success:
   extends: .notify
-  when: on_success
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+    when: never
+  - if: $CI_COMMIT_BRANCH
+    when: on_success
   needs:
   - docs
   variables:
@@ -138,7 +157,11 @@ notify_success:
 
 notify_failure:
   extends: .notify
-  when: on_failure
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+    when: never
+  - if: $CI_COMMIT_BRANCH
+    when: on_failure
   needs:
   - docs
   variables:
